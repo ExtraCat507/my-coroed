@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "coroed/api/log.h"
 
@@ -19,6 +20,7 @@ void test_print();
 
 int main() {
   log_init();
+  srand(time(NULL));
 
   struct test tests[] = {
       {"counter", test_counter},
