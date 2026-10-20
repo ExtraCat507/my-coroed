@@ -23,6 +23,7 @@ void test_priority_load();
 void test_sched_empty();
 void test_sched_single();
 void test_sched_stress();
+void test_benchmark();
 
 int main() {
   log_init();
@@ -38,6 +39,7 @@ int main() {
       {"empty", test_sched_empty},
       {"single", test_sched_single},
       {"stress", test_sched_stress},
+      {"benchmark", test_benchmark},
       {     NULL,         NULL},
   };
 
