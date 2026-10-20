@@ -1,6 +1,7 @@
 #include "schedy.h"
 
 #include <assert.h>
+#include <iso646.h>
 #include <sched.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -141,6 +142,8 @@ static size_t active_tasks = 0;
 
 static kthread_id_t kthread_ids[SCHED_WORKERS_COUNT];
 static struct worker workers[SCHED_WORKERS_COUNT];
+static enum priority pickme_order[] = {PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_HIGH, PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_HIGH};
+static size_t order_pointer = 0;
 
 /**
  * Установить задачу в пустое состояние.
@@ -272,9 +275,8 @@ int sched_loop(void* argument) {
 struct task* sched_acquire_next() {
   spinlock_lock(&tasks_lock);
 
-  int r = rand() % 100;
-  size_t designated_priority = r < 60 ? PRIORITY_HIGH :
-                               r < 90 ? PRIORITY_MEDIUM : PRIORITY_LOW;
+  size_t designated_priority = pickme_order[order_pointer];
+  order_pointer = (order_pointer+1) % 10;
 
   for (size_t offset = 0; offset < PRIORITY_COUNT; ++offset) {
     size_t priority = (designated_priority + offset) % PRIORITY_COUNT;
