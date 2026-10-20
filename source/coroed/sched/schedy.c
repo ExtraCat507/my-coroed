@@ -307,7 +307,7 @@ void sched_release(struct task* task) {
     --active_tasks;
     spinlock_unlock(&task->lock);
     spinlock_unlock(&tasks_lock);
-  } else if (task->state == UTHREAD_RUNNING) {
+  } else if (task->state == UTHREAD_RUNNING) { // 8ms - high, 9-20ms - medium, >20 low
     task->priority = task->last_burst_ns < 8000000ULL ? PRIORITY_HIGH :
                      task->last_burst_ns < 20000000ULL ? PRIORITY_MEDIUM : PRIORITY_LOW;
     spinlock_lock(&tasks_lock);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 struct queue_node {
     struct queue_node *next;
 };
@@ -8,6 +9,7 @@ struct queue_node {
 struct queue {
     struct queue_node *head;
     struct queue_node *tail;
+    size_t size;
 };
 
 // Инициализировать / очистить очередь
