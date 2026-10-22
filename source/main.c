@@ -32,14 +32,14 @@ int main() {
   struct test tests[] = {
       // {"counter", test_counter},
       // {  "event",   test_event},
-      // {  "print",   test_print},
+      {  "print",   test_print},
       // {"feedback", test_feedback},
       // {"queue", test_queue},
       // {"priority", test_priority_load},
       // {"empty", test_sched_empty},
       // {"single", test_sched_single},
       // {"stress", test_sched_stress},
-      {"benchmark", test_benchmark},
+      // {"benchmark", test_benchmark},
       {     NULL,         NULL},
   };
 

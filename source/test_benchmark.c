@@ -183,4 +183,8 @@ void test_benchmark(void) {
   benchmark_scenario("short", BENCH_SHORT, 256);
   benchmark_scenario("yield", BENCH_YIELD, 256);
   benchmark_scenario("mixed", BENCH_MIXED, 60);
+
+  tasks_print_statistics();
+  // sched_print_statistics();
+
 }
