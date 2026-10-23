@@ -1,9 +1,11 @@
 #pragma once
 
+#include "coroed/api/event.h"
 #include "coroed/api/task.h"
 #include "uthread.h"
 
 struct task;
+struct event;
 
 void sched_init();
 
@@ -17,6 +19,6 @@ void sched_print_statistics();
 
 void sched_destroy();
 
-void shed_event_wait(struct task* caller, struct event* event);
+void sched_event_wait(struct task* caller, struct event* event);
 
-void shed_event_fire(struct event *event);
+void sched_event_fire(struct event *event);

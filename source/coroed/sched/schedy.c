@@ -88,6 +88,9 @@ struct task {
     Предотвращает lost wake-up  */
   bool wake_pending;
 
+  /* Флаг, показывающий, что задача может быть безопасно заблокирована */
+  bool parked;
+
   enum {
     /** Готова к исполнению. */
     UTHREAD_RUNNABLE,
@@ -171,6 +174,9 @@ void sched_task_init(struct task* task) {
   task->queue_node.next = NULL;
   task->all_next = NULL;
   task->last_burst_ns = 0;
+  task->wake_pending = false;
+  task->parked = false;
+  event_init(&task->finished);
   spinlock_init(&task->lock);
 }
 
@@ -274,22 +280,6 @@ int sched_loop(void* argument) {
     if (task->state == UTHREAD_FINISHED) {
       worker->statistics.finished += 1;
     }
-    else if (task->state == UTHREAD_BLOCKED) {
-        spinlock_lock(&tasks_lock);
-
-        if (task->wake_pending) {
-            task->wake_pending = false;
-            task->state = UTHREAD_RUNNABLE;
-
-            queue_push_back(
-                &multilevel_feedback_queue[task->priority],
-                &task->queue_node
-            );
-        }
-
-        spinlock_unlock(&task->lock);
-        spinlock_unlock(&tasks_lock);
-    }
 
     sched_release(task);
 
@@ -349,7 +339,21 @@ void sched_release(struct task* task) {
     spinlock_unlock(&task->lock);
     spinlock_unlock(&tasks_lock);
   } else if (task->state == UTHREAD_BLOCKED)  {
+      spinlock_lock(&tasks_lock);
+
+      if (task->wake_pending) {
+          task->wake_pending = false;
+          task->state = UTHREAD_RUNNABLE;
+
+          queue_push_back(
+              &multilevel_feedback_queue[task->priority],
+              &task->queue_node
+          );
+      }
+
       spinlock_unlock(&task->lock);
+      spinlock_unlock(&tasks_lock);
+
   }
 }
 
@@ -470,7 +474,7 @@ void sched_destroy() {
 }
 
 // Блокирует поток, если он ждёт ресурс
-void shed_event_wait(struct task* caller, struct event* event){
+void sched_event_wait(struct task* caller, struct event* event){
     spinlock_lock(&tasks_lock);
 
     if(atomic_load(&event->is_fired)){
@@ -485,15 +489,22 @@ void shed_event_wait(struct task* caller, struct event* event){
 }
 
 //
-void shed_event_fire(struct event *event){
+void sched_event_fire(struct event *event){
     spinlock_lock(&tasks_lock);
     atomic_store(&event->is_fired, true);
     while(!empty(&event->waiters)){
-        struct task* blocked_task =  container_of(queue_pop_front(&event->waiters), struct task, queue_node);
-        spinlock_lock(&blocked_task->lock);
+        struct task* blocked_task =  container_of(queue_pop_front(&event->waiters), struct task, wait_node);
+        blocked_task->wake_pending = true;
+
+        if(!blocked_task->parked){
+            blocked_task->wake_pending = true;
+            continue;
+        }
+
+        blocked_task->parked = false;
         blocked_task->state = UTHREAD_RUNNABLE;
         queue_push_back(&multilevel_feedback_queue[PRIORITY_HIGH], &blocked_task->queue_node);
-        spinlock_unlock(&blocked_task->lock);
+
     }
 
     spinlock_unlock(&tasks_lock);
