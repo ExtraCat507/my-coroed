@@ -246,6 +246,9 @@ void sched_switch_to(struct worker* worker, struct task* task) {
  */
 struct task* sched_acquire_next();
 
+/* Отдать сигнал о том, что событие случилось. ИСПОЛЬЗОВАТЬ ТОЛЬКО ПОД ВНЕШНЕЙ БЛОКИРОВКОЙ */
+void sched_event_fire_locked(struct event * event);
+
 /**
  * Вернуть задачу в очередь планирования.
  *
@@ -328,6 +331,7 @@ void sched_release(struct task* task) {
     spinlock_lock(&tasks_lock);
     task->state = UTHREAD_ZOMBIE;
     --active_tasks;
+    sched_event_fire_locked(&task->finished);
     spinlock_unlock(&task->lock);
     spinlock_unlock(&tasks_lock);
   } else if (task->state == UTHREAD_RUNNING) { // 8ms - high, 9-20ms - medium, >20 low
@@ -344,11 +348,15 @@ void sched_release(struct task* task) {
       if (task->wake_pending) {
           task->wake_pending = false;
           task->state = UTHREAD_RUNNABLE;
+          task->priority = PRIORITY_HIGH;
 
           queue_push_back(
               &multilevel_feedback_queue[task->priority],
               &task->queue_node
           );
+      }
+      else{
+          task->parked = true;
       }
 
       spinlock_unlock(&task->lock);
@@ -482,19 +490,19 @@ void sched_event_wait(struct task* caller, struct event* event){
         return;
     }
 
+    caller->wake_pending = false;
+    caller->parked = false;
     queue_push_back(&event->waiters, &caller->wait_node);
     caller->state = UTHREAD_BLOCKED;
     spinlock_unlock(&tasks_lock);
     sched_switch_to_scheduler(caller);
 }
 
-//
-void sched_event_fire(struct event *event){
-    spinlock_lock(&tasks_lock);
+
+void sched_event_fire_locked(struct event *event){
     atomic_store(&event->is_fired, true);
     while(!empty(&event->waiters)){
         struct task* blocked_task =  container_of(queue_pop_front(&event->waiters), struct task, wait_node);
-        blocked_task->wake_pending = true;
 
         if(!blocked_task->parked){
             blocked_task->wake_pending = true;
@@ -503,9 +511,15 @@ void sched_event_fire(struct event *event){
 
         blocked_task->parked = false;
         blocked_task->state = UTHREAD_RUNNABLE;
-        queue_push_back(&multilevel_feedback_queue[PRIORITY_HIGH], &blocked_task->queue_node);
+        blocked_task->priority = PRIORITY_HIGH;
+        queue_push_back(&multilevel_feedback_queue[blocked_task->priority], &blocked_task->queue_node);
 
     }
+}
 
+//
+void sched_event_fire(struct event *event){
+    spinlock_lock(&tasks_lock);
+    sched_event_fire_locked(event);
     spinlock_unlock(&tasks_lock);
 }
