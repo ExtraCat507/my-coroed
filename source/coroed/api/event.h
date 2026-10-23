@@ -3,6 +3,7 @@
 #include <stdatomic.h>
 
 #include "coroed/api/task.h"
+#include "coroed/core/queue.h"
 
 /**
  * Синтаксический сахар для использования в теле файбера.
@@ -20,6 +21,7 @@
  */
 struct event {
   atomic_bool is_fired;
+  struct queue waiters;
 };
 
 /**

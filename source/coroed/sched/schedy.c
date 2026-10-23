@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <iso646.h>
 #include <sched.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "coroed/api/event.h"
 #include "coroed/api/task.h"
 #include "coroed/core/relax.h"
 #include "coroed/core/spinlock.h"
@@ -76,6 +78,16 @@ struct task {
   struct timespec run_started_at;
   uint64_t last_burst_ns;
 
+  // Нода задачи в блок-листах других задач
+  struct queue_node wait_node;
+
+  // Событие, показываеющее что задача завершилась (одноразовое)
+  struct event finished;
+
+  /*  Флаг, показывающий что задача уже может быть разбужена.
+    Предотвращает lost wake-up  */
+  bool wake_pending;
+
   enum {
     /** Готова к исполнению. */
     UTHREAD_RUNNABLE,
@@ -88,6 +100,9 @@ struct task {
 
     /** Отработала и может быть переиспользования. */
     UTHREAD_ZOMBIE,
+
+    /** Заблокирована ожиданием другого потока */
+    UTHREAD_BLOCKED,
   } state;  // Текущее состояние задачи
 
   /**
@@ -259,6 +274,22 @@ int sched_loop(void* argument) {
     if (task->state == UTHREAD_FINISHED) {
       worker->statistics.finished += 1;
     }
+    else if (task->state == UTHREAD_BLOCKED) {
+        spinlock_lock(&tasks_lock);
+
+        if (task->wake_pending) {
+            task->wake_pending = false;
+            task->state = UTHREAD_RUNNABLE;
+
+            queue_push_back(
+                &multilevel_feedback_queue[task->priority],
+                &task->queue_node
+            );
+        }
+
+        spinlock_unlock(&task->lock);
+        spinlock_unlock(&tasks_lock);
+    }
 
     sched_release(task);
 
@@ -317,8 +348,8 @@ void sched_release(struct task* task) {
     queue_push_back(&multilevel_feedback_queue[task->priority], &task->queue_node);
     spinlock_unlock(&task->lock);
     spinlock_unlock(&tasks_lock);
-  } else /* if (task->state == UTHREAD_BLOCKED) */ {
-    assert(false && "Not implemented");
+  } else if (task->state == UTHREAD_BLOCKED)  {
+      spinlock_unlock(&task->lock);
   }
 }
 
@@ -436,4 +467,34 @@ void sched_destroy() {
     task = next;
   }
   all_tasks = NULL;
+}
+
+// Блокирует поток, если он ждёт ресурс
+void shed_event_wait(struct task* caller, struct event* event){
+    spinlock_lock(&tasks_lock);
+
+    if(atomic_load(&event->is_fired)){
+        spinlock_unlock(&tasks_lock);
+        return;
+    }
+
+    queue_push_back(&event->waiters, &caller->wait_node);
+    caller->state = UTHREAD_BLOCKED;
+    spinlock_unlock(&tasks_lock);
+    sched_switch_to_scheduler(caller);
+}
+
+//
+void shed_event_fire(struct event *event){
+    spinlock_lock(&tasks_lock);
+    atomic_store(&event->is_fired, true);
+    while(!empty(&event->waiters)){
+        struct task* blocked_task =  container_of(queue_pop_front(&event->waiters), struct task, queue_node);
+        spinlock_lock(&blocked_task->lock);
+        blocked_task->state = UTHREAD_RUNNABLE;
+        queue_push_back(&multilevel_feedback_queue[PRIORITY_HIGH], &blocked_task->queue_node);
+        spinlock_unlock(&blocked_task->lock);
+    }
+
+    spinlock_unlock(&tasks_lock);
 }

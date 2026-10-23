@@ -16,3 +16,7 @@ void sched_wait();
 void sched_print_statistics();
 
 void sched_destroy();
+
+void shed_event_wait(struct task* caller, struct event* event);
+
+void shed_event_fire(struct event *event);
