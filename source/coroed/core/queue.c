@@ -7,11 +7,13 @@ void queue_init(struct queue *q)
 {
     q->head = NULL;
     q->tail = NULL;
+    q->size = 0;
 }
 
 
 void queue_push_back(struct queue *queue, struct queue_node *node){
     node->next = NULL;
+    queue->size++;
     if(queue->tail == NULL){
         queue->head = node;
         queue->tail = node;
@@ -23,7 +25,7 @@ void queue_push_back(struct queue *queue, struct queue_node *node){
 
 struct queue_node *queue_pop_front(struct queue *queue){
     struct queue_node *top = queue->head;
-    if (top == NULL){ // empty
+    if (empty(queue)){ // empty
         return  NULL;
     }
     if(top->next == NULL){ // one element
@@ -32,6 +34,7 @@ struct queue_node *queue_pop_front(struct queue *queue){
     }
     queue->head = top->next;
     top->next = NULL;
+    queue->size--;
     return top;
 }
 
