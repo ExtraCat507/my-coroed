@@ -1,7 +1,10 @@
 #include "schedy.h"
 
+#include <asm-generic/errno-base.h>
+#include <asm-generic/errno.h>
 #include <assert.h>
 #include <iso646.h>
+#include <liburing/io_uring.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -11,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <liburing.h>
 
 #include "coroed/api/event.h"
 #include "coroed/api/task.h"
@@ -20,6 +24,30 @@
 #include "coroed/core/container_of.h"
 #include "kthread.h"
 #include "uthread.h"
+
+#define QUEUE_DEPTH 256
+#define BUFFER_SIZE 4096
+
+// Тип IO операции
+enum op_type {OP_SEND, OP_RECV, OP_READ, OP_WRITE,OP_ACCEPT};
+
+// Структура IO операции.
+struct io_request{
+    // Тип операции
+    enum op_type type;
+
+    // Номер файлового дескриптора
+    int fd;
+
+    // Буфер для данных
+    char buffer[BUFFER_SIZE];
+    size_t len;
+
+    // Ивент отвечающий за готовность запроса. Привязывается к заблокированному uthread.
+    struct event event;
+
+    ssize_t result;
+};
 
 enum {
   /**
@@ -141,6 +169,12 @@ struct worker {
    */
   struct task* running_task;
 
+  /*
+   * Буффер(ы) io_uring для самописного asyncIO api.
+   * По одному на воркер.
+   */
+  struct io_uring ring;
+
   struct {
     size_t steps;     // Сколько шагов было выполнено
     size_t finished;  // Сколько задач было завершено
@@ -257,6 +291,25 @@ void sched_event_fire_locked(struct event * event);
  */
 void sched_release(struct task* task);
 
+void io_poll_cqe(struct worker *worker){
+    struct io_uring_cqe *cqe;
+    int ret = io_uring_peek_cqe(&worker->ring, &cqe);
+    if(ret == -EAGAIN){
+        return; //  свободно
+    }
+
+    if (ret < 0){
+        assert(false && "Cannot get CQE");
+        return;
+    }
+
+    struct io_request *request = io_uring_cqe_get_data(cqe);
+    io_uring_cqe_seen(&worker->ring, cqe);
+
+    event_fire(&request->event);
+}
+
+
 /**
  * Цикл планировщика. Выполняется, пока есть задачи.
  */
@@ -265,6 +318,9 @@ int sched_loop(void* argument) {
   kthread_ids[worker->index] = kthread_id();
 
   for (;;) {
+    // Опросим io_uring CQE и разбудим потоки, которым пришли данные
+    io_poll_cqe(worker);
+
     struct task* task = sched_acquire_next();
     if (task == NULL) {
       spinlock_lock(&tasks_lock);
@@ -292,6 +348,7 @@ int sched_loop(void* argument) {
     //       потоки в RUNNABLE состояние.
   }
 
+  io_uring_queue_exit(&worker->ring);
   return 0;
 }
 
@@ -434,6 +491,10 @@ void sched_start() {
   for (size_t i = 0; i < SCHED_WORKERS_COUNT; ++i) {
     struct worker* worker = &workers[i];
     enum kthread_status status = kthread_create(&worker->kthread, sched_loop, worker);
+    int ret = io_uring_queue_init(QUEUE_DEPTH, &worker->ring,0);
+    if(ret < 0 ){
+        assert(false && "Cannot create io_uring");
+    }
     assert(status == KTHREAD_SUCCESS);
   }
 }
@@ -522,4 +583,87 @@ void sched_event_fire(struct event *event){
     spinlock_lock(&tasks_lock);
     sched_event_fire_locked(event);
     spinlock_unlock(&tasks_lock);
+}
+
+
+
+ssize_t coro_recv(struct task *task, int fd, char buffer[BUFFER_SIZE], int len){
+    struct io_request *r = calloc(1, sizeof(*r));
+    r->type = OP_RECV;
+    r->fd = fd;
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&task->worker->ring);
+    if(!sqe){
+        // full sqe
+        perror("SQ full while scheduling recv\n");
+        free(r);
+        return -ENOBUFS;
+    }
+
+    io_uring_prep_recv(sqe, fd, buffer, len, 0);
+    io_uring_sqe_set_data(sqe, r);
+
+    int ret = io_uring_submit(&task->worker->ring);
+    if(ret<0){
+        return ret;
+    }
+    // wait for the event
+    event_init(&r->event);
+    event_wait(task, &r->event);
+
+    return r->result;
+}
+
+ssize_t coro_accept(struct task* task, int fd, struct sockaddr *addr, socklen_t *addr_len){
+    struct io_request *r = calloc(1, sizeof(*r));
+    r->type = OP_ACCEPT;
+    r->fd = fd;
+
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&task->worker->ring);
+    if(!sqe){
+        // full sqe
+        perror("SQ full while scheduling recv\n");
+        free(r);
+        return -ENOBUFS;
+    }
+
+    io_uring_prep_accept(sqe, fd, addr, addr_len,0);
+    io_uring_sqe_set_data(sqe, r);
+
+    int ret = io_uring_submit(&task->worker->ring);
+    if(ret<0){
+        return ret;
+    }
+    // wait for the event
+    event_init(&r->event);
+    event_wait(task, &r->event);
+
+    return r->result;
+}
+
+
+ssize_t coro_send(struct task *task, int fd, char buffer[BUFFER_SIZE], int len){
+    struct io_request *r = calloc(1, sizeof(*r));
+    r->type = OP_SEND;
+    r->fd = fd;
+
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&task->worker->ring);
+    if(!sqe){
+        // full sqe
+        perror("SQ full while scheduling recv\n");
+        free(r);
+        return -ENOBUFS;
+    }
+
+    io_uring_prep_send(sqe, fd, buffer, len,0);
+    io_uring_sqe_set_data(sqe, r);
+
+    int ret = io_uring_submit(&task->worker->ring);
+    if(ret<0){
+        return ret;
+    }
+    // wait for the event
+    event_init(&r->event);
+    event_wait(task, &r->event);
+
+    return r->result;
 }
