@@ -304,6 +304,7 @@ void io_poll_cqe(struct worker *worker){
     }
 
     struct io_request *request = io_uring_cqe_get_data(cqe);
+    request->result = cqe->res;
     io_uring_cqe_seen(&worker->ring, cqe);
 
     event_fire(&request->event);
@@ -490,11 +491,11 @@ task_t sched_submit(void (*entry)(), void* argument) {
 void sched_start() {
   for (size_t i = 0; i < SCHED_WORKERS_COUNT; ++i) {
     struct worker* worker = &workers[i];
-    enum kthread_status status = kthread_create(&worker->kthread, sched_loop, worker);
     int ret = io_uring_queue_init(QUEUE_DEPTH, &worker->ring,0);
     if(ret < 0 ){
         assert(false && "Cannot create io_uring");
     }
+    enum kthread_status status = kthread_create(&worker->kthread, sched_loop, worker);
     assert(status == KTHREAD_SUCCESS);
   }
 }
@@ -610,7 +611,10 @@ ssize_t coro_recv(struct task *task, int fd, char buffer[BUFFER_SIZE], int len){
     event_init(&r->event);
     event_wait(task, &r->event);
 
-    return r->result;
+    ssize_t result = r->result;
+    free(r);
+
+    return result;
 }
 
 ssize_t coro_accept(struct task* task, int fd, struct sockaddr *addr, socklen_t *addr_len){
@@ -630,8 +634,8 @@ ssize_t coro_accept(struct task* task, int fd, struct sockaddr *addr, socklen_t 
     io_uring_sqe_set_data(sqe, r);
 
     int ret = io_uring_submit(&task->worker->ring);
-    if(ret<0){
-        return ret;
+    if(ret<=0){
+        return -1;
     }
     // wait for the event
     event_init(&r->event);
