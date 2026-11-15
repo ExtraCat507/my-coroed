@@ -16,6 +16,7 @@ CFLAGS   += $(OPTIMIZATION_LEVEL)
 CFLAGS   += $(SANITIZERS)
 
 LDFLAGS   = $(CFLAGS)
+LDFLAGS   += -luring
 
 SRCS     := $(shell find source -iname '*.c') $(shell find source -iname '*.S')
 
