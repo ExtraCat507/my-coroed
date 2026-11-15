@@ -23,4 +23,4 @@ void sched_event_wait(struct task* caller, struct event* event);
 
 void sched_event_fire(struct event *event);
 
-struct io_uring sched_current_ring(struct task *task);
+struct io_uring *sched_current_ring(struct task *task);

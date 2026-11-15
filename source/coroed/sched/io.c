@@ -10,15 +10,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <liburing.h>
 
 #include "coroed/api/event.h"
-#include "coroed/api/task.h"
-#include "schedy.h"
-#include "worker.h"
-#include "coroed/sched/schedy.h"
 
 
 void io_poll_cqe(struct io_uring *ring){
