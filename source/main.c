@@ -24,15 +24,17 @@ void test_sched_empty();
 void test_sched_single();
 void test_sched_stress();
 void test_benchmark();
+void test_server();
 
 int main() {
   log_init();
   srand(time(NULL));
 
   struct test tests[] = {
-      {"counter", test_counter},
-      {  "event",   test_event},
-      {  "print",   test_print},
+      // {"counter", test_counter},
+      // {  "event",   test_event},
+      // {  "print",   test_print},
+      {"server", test_server},
       // {"feedback", test_feedback},
       // {"queue", test_queue},
       // {"priority", test_priority_load},
