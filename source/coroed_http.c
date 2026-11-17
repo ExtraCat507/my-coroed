@@ -110,9 +110,6 @@ TASK_DEFINE(handle_client, int, arg){
     }
 
     buffer[n] = '\0';
-
-    printf("Request:\n%s\n", buffer);
-
     char *response = route(buffer);
 
     if (response == NULL) {
