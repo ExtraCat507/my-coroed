@@ -13,6 +13,9 @@
 #define PORT 8080
 #define BUFFER_SIZE 4096
 
+#define ROUTE_HELLO "/hello/"
+#define ROUTE_VITYA "/vitya"
+
 enum response_type{
     TEXT, JSON
 };
@@ -40,14 +43,8 @@ char *form_response(const char *text, enum response_type type) {
     return response;
 }
 
-char *route(const char *url) {
-    const char *p = url;
-
-    while (*p && *p != '/') p++;
-    if (!*p || strncmp(p, "/hello/", 7) != 0)
-        return form_response("Not Found", TEXT);
-
-    p += 7;
+char *hello_handler(const char *p){
+    p += strlen(ROUTE_HELLO);
 
     char name[256];
     int i = 0;
@@ -59,8 +56,43 @@ char *route(const char *url) {
 
     char json[300];
     snprintf(json, sizeof(json), "{\"message\":\"%s\"}", name);
-
     return form_response(json, JSON);
+}
+
+char *vitya_handler(const char *p){
+    FILE *file = fopen("./source/vitya", "rb");
+    if (!file) return NULL;
+
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    rewind(file);
+    char *text = malloc((size_t)size + 1);
+    if (!text) {
+        fclose(file);
+        return NULL;
+    }
+
+    size_t n = fread(text, 1, (size_t)size, file);
+    fclose(file);
+
+    text[n] = '\0';
+
+    char *response = form_response(text, TEXT);
+    free(text);
+    return response;
+}
+
+char *route(const char *url) {
+    const char *p = url;
+
+    while (*p && *p != '/') p++;
+    if(!*p) return form_response("Not found", TEXT);
+    if (strncmp(p, ROUTE_HELLO, strlen(ROUTE_HELLO)) == 0)
+         return hello_handler(p);
+    if(strncmp(p,ROUTE_VITYA, strlen(ROUTE_VITYA)) == 0)
+        return vitya_handler(p);
+
+    return form_response("Not Found", TEXT);
 }
 
 TASK_DEFINE(handle_client, int, arg){
