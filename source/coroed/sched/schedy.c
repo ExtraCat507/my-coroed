@@ -13,8 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <liburing.h>
+#include <unistd.h>
 
 #include "coroed/api/event.h"
 #include "coroed/api/task.h"
@@ -141,6 +143,11 @@ static struct worker workers[SCHED_WORKERS_COUNT];
 static enum priority pickme_order[] = {PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_HIGH, PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_HIGH};
 static size_t order_pointer = 0;
 
+// Защищает список умерщвленных файберов
+static struct spinlock zlock;
+// К-Л-А-Д-Б-И-Щ-Е-Е-Е
+static struct queue zombies;
+
 /**
  * Установить задачу в пустое состояние.
  */
@@ -176,6 +183,8 @@ void sched_init() {
   for (size_t i = 0; i < PRIORITY_COUNT; ++i) {
     queue_init(&multilevel_feedback_queue[i]);
   }
+  spinlock_init(&zlock);
+  queue_init(&zombies);
   for (size_t i = 0; i < SCHED_WORKERS_COUNT; ++i) {
     kthread_ids[i] = 0;
     sched_worker_init(&workers[i], i);
@@ -313,6 +322,9 @@ void sched_release(struct task* task) {
     uthread_reset(task->thread);
     spinlock_lock(&tasks_lock);
     task->state = UTHREAD_ZOMBIE;
+    spinlock_lock(&zlock);
+    queue_push_back(&zombies, &task->queue_node);
+    spinlock_unlock(&zlock);
     --active_tasks;
     sched_event_fire_locked(&task->finished);
     spinlock_unlock(&task->lock);
@@ -372,16 +384,32 @@ task_t task_submit(struct task* caller, uthread_routine entry, void* argument) {
 
 // Попытка сделать таску RUNNABLE с новым контекстом и засабмитить её в очередь (TODO - поддержка Zombie)
 task_t sched_try_submit(void (*entry)(), void* argument) {
-    struct task* task = malloc(sizeof(*task));
+    spinlock_lock(&zlock);
+    struct queue_node *node = queue_pop_front(&zombies);
+    spinlock_unlock(&zlock);
+    struct task* task =  node ? container_of(node, struct task, queue_node) : NULL  ;
+    if(task && task->state == UTHREAD_ZOMBIE){
+        struct uthread* thread = task->thread;
+        sched_task_init(task);
+        task->thread = thread;
+    }
+    else{
+        task = malloc(sizeof(*task));
 
-    if (task == NULL)
-        return (task_t){.task = NULL};
+        if (task == NULL)
+            return (task_t){.task = NULL};
 
-    sched_task_init(task);
-    task->thread = uthread_allocate();
-    if (task->thread == NULL) {
-        free(task);
-        return (task_t){.task = NULL};
+        sched_task_init(task);
+        task->thread = uthread_allocate();
+        if (task->thread == NULL) {
+            free(task);
+            return (task_t){.task = NULL};
+        }
+
+        spinlock_lock(&tasks_lock);
+        task->all_next = all_tasks;
+        all_tasks = task;
+        spinlock_unlock(&tasks_lock);
     }
 
     uthread_reset(task->thread);
@@ -392,8 +420,6 @@ task_t sched_try_submit(void (*entry)(), void* argument) {
     task->priority = PRIORITY_HIGH;
 
     spinlock_lock(&tasks_lock);
-    task->all_next = all_tasks;
-    all_tasks = task;
     ++active_tasks;
     queue_push_back(&multilevel_feedback_queue[task->priority], &task->queue_node);
     spinlock_unlock(&tasks_lock);

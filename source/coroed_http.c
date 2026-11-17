@@ -15,6 +15,7 @@
 
 #define ROUTE_HELLO "/hello/"
 #define ROUTE_VITYA "/vitya"
+#define ROUTE_QUIT "/quit"
 
 enum response_type{
     TEXT, JSON
@@ -91,6 +92,9 @@ char *route(const char *url) {
          return hello_handler(p);
     if(strncmp(p,ROUTE_VITYA, strlen(ROUTE_VITYA)) == 0)
         return vitya_handler(p);
+    if(strncmp(p, ROUTE_QUIT, strlen(ROUTE_QUIT)) == 0){
+        return form_response("fine", TEXT);
+    }
 
     return form_response("Not Found", TEXT);
 }
